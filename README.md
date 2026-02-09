@@ -5,34 +5,49 @@ Goal is to recognize the distance, rotation, and angle of a known size AprilTag 
 in front of the camera. 
 
 App should show:
+
 - a video stream with a box overlay around the AprilTag
+
 - a live updating display of:
+
 	- distance to the center of the AprilTag
-	- rotation angle in X Y Z
+
+  	- rotation angle in X Y Z
 
 # Getting Started
+
 this project was built to run on M2 MacBookAir
 
-1. Install Dependencies
+## 1. Install Dependencies
+
 use bash script for installing dependencies and running project:
+
 $ chmod +x setup.sh
+
 $ ./setup.sh
+
 
 make sure to allow shell application to access camera. may need to restart terminal.
 
 press 'q' to quit app once dependencies are installed and confirmed to be working.
 
-2. Generate pdfs of AprilTags to print out
+## 2. Generate pdfs of AprilTags to print out
+
 tags taken from:
+
 https://github.com/AprilRobotics/apriltag-imgs.git
 
 use bash script for cloning the repo and selecting which tag id to print
+
 $ chmod +x ./tools/generate_tag_pdf.sh 
+
 $ ./tools/generate_tag_pdf.sh
 
 a new directory in root now contains a printable pdf of the AprilTag you chose
 sized to 10cm exactly which is what the code expects
+
 $ cd ./generated_pdfs/ 
 
-3. Run code and be amazed.
+## 3. Run code and be amazed.
+
 $ ./setup.sh
