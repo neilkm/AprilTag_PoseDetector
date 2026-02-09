@@ -1,0 +1,4 @@
+# .gitignore
+
+# temporary swp from vim
+*.swp
