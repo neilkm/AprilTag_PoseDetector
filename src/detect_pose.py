@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import yaml
-from pupil_apriltags import Detector
 from pathlib import Path
 import math
 
@@ -10,7 +9,7 @@ def load_camera_params(yaml_path: str):
     Loads camera intrinsics K and distortion coeffs dist from a YAML file.
     Expected format:
       camera_matrix: [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
-      dist_coeffs: [k1, k2, p1, p2, k3]  # or length 4/8 depending on calibration
+      dist_coeffs: [k1, k2, p1, p2, k3]  # length can vary (4/5/8)
     """
     with open(yaml_path, "r") as f:
         data = yaml.safe_load(f)
@@ -20,38 +19,37 @@ def load_camera_params(yaml_path: str):
 
 def euler_from_rotation_matrix(R: np.ndarray):
     """
-    Convert rotation matrix to Euler angles (roll, pitch, yaw) in degrees.
+    Convert rotation matrix to Euler angles in degrees.
 
-    Convention:
-      - OpenCV camera frame: +x right, +y down, +z forward
-      - roll  about +z
-      - pitch about +x
-      - yaw   about +y
-    This is one common robotics-ish interpretation; the key is consistency.
+    Output labels:
+      X = pitch (about camera +X)
+      Y = yaw   (about camera +Y)
+      Z = roll  (about camera +Z)
+
+    Camera frame (OpenCV): +x right, +y down, +z forward
     """
-    # Guard numeric issues
-    sy = math.sqrt(R[0,0]*R[0,0] + R[2,0]*R[2,0])
+    sy = math.sqrt(R[0, 0]*R[0, 0] + R[2, 0]*R[2, 0])
     singular = sy < 1e-6
 
     if not singular:
-        pitch = math.atan2(R[2,1], R[2,2])     # about x
-        yaw   = math.atan2(-R[2,0], sy)        # about y
-        roll  = math.atan2(R[1,0], R[0,0])     # about z
+        pitch = math.atan2(R[2, 1], R[2, 2])     # about x
+        yaw   = math.atan2(-R[2, 0], sy)         # about y
+        roll  = math.atan2(R[1, 0], R[0, 0])     # about z
     else:
-        pitch = math.atan2(-R[1,2], R[1,1])
-        yaw   = math.atan2(-R[2,0], sy)
+        pitch = math.atan2(-R[1, 2], R[1, 1])
+        yaw   = math.atan2(-R[2, 0], sy)
         roll  = 0.0
 
     return (math.degrees(pitch), math.degrees(yaw), math.degrees(roll))
 
 def draw_tag_box(frame, corners, color=(0, 255, 0), thickness=2):
-    # corners: (4,2) in order provided by detector
     pts = corners.astype(int).reshape(-1, 1, 2)
     cv2.polylines(frame, [pts], isClosed=True, color=color, thickness=thickness)
 
 def draw_axes(frame, K, dist, rvec, tvec, axis_len=0.05):
     """
-    Draw 3D axes on the tag: X=red, Y=green, Z=blue.
+    Draw 3D axes from the tag origin:
+      X=red, Y=green, Z=blue
     axis_len in meters.
     """
     axis_3d = np.array([
@@ -65,67 +63,58 @@ def draw_axes(frame, K, dist, rvec, tvec, axis_len=0.05):
     imgpts = imgpts.reshape(-1, 2).astype(int)
 
     origin = tuple(imgpts[0])
-    cv2.line(frame, origin, tuple(imgpts[1]), (0, 0, 255), 2)  # X red
-    cv2.line(frame, origin, tuple(imgpts[2]), (0, 255, 0), 2)  # Y green
-    cv2.line(frame, origin, tuple(imgpts[3]), (255, 0, 0), 2)  # Z blue
+    cv2.line(frame, origin, tuple(imgpts[1]), (0, 0, 255), 2)   # X red
+    cv2.line(frame, origin, tuple(imgpts[2]), (0, 255, 0), 2)   # Y green
+    cv2.line(frame, origin, tuple(imgpts[3]), (255, 0, 0), 2)   # Z blue
 
 def main():
     # === CONFIG ===
-    tag_family = "tag36h11"
-    tag_size_m = 0.10  # <-- SET THIS: physical tag side length in meters
-    camera_yaml = str(Path(__file__).parent / "camera.yaml")
-    use_calibrated = Path(camera_yaml).exists()
-
-    # Webcam index (0 is typical)
+    tag_size_m = 0.10  # <-- SET THIS to your measured black-square edge length in meters
     cam_index = 0
 
-    # AprilTag detector
-    detector = Detector(
-        families=tag_family,
-        nthreads=2,
-        quad_decimate=1.0,
-        quad_sigma=0.0,
-        refine_edges=1,
-        decode_sharpening=0.25,
-        debug=0
-    )
+    # OpenCV AprilTag detector (requires opencv-contrib-python)
+    aruco = cv2.aruco
+    tag_dict = aruco.getPredefinedDictionary(aruco.DICT_APRILTAG_36h11)
+    params = aruco.DetectorParameters()
+    detector = aruco.ArucoDetector(tag_dict, params)
 
     cap = cv2.VideoCapture(cam_index)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam. Try cam_index=1 or check permissions.")
 
-    # If calibrated, load camera intrinsics; else build a rough guess from frame size
+    # Calibration load (optional)
+    camera_yaml = Path(__file__).parent / "camera.yaml"
+    use_calibrated = camera_yaml.exists()
+
     K = None
     dist = None
 
-    print("Press 'q' to quit.")
-    print(f"Calibration file found: {use_calibrated} ({camera_yaml})")
-
-    # 3D model points for tag corners in tag frame, centered at origin.
-    # Must match the detector corner ordering.
-    # pupil-apriltags provides corners in order: [top-left, top-right, bottom-right, bottom-left] (typically)
-    # We'll assume that common ordering; if overlay looks mirrored, we’ll swap accordingly.
+    # 3D model points for tag corners (meters), tag-centered.
+    # OpenCV's detectMarkers returns corners in consistent order around the tag.
     s = tag_size_m
     half = s / 2.0
     obj_pts = np.array([
-        [-half, -half, 0],  # corner 0
-        [ half, -half, 0],  # corner 1
-        [ half,  half, 0],  # corner 2
-        [-half,  half, 0],  # corner 3
+        [-half, -half, 0],
+        [ half, -half, 0],
+        [ half,  half, 0],
+        [-half,  half, 0],
     ], dtype=np.float64)
+
+    print("Press 'q' to quit.")
+    print(f"Calibration file found: {use_calibrated} ({camera_yaml})")
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Lazy-init intrinsics if not calibrated
+        # Init intrinsics
         if K is None:
             h, w = frame.shape[:2]
             if use_calibrated:
-                K, dist = load_camera_params(camera_yaml)
+                K, dist = load_camera_params(str(camera_yaml))
             else:
-                # Rough guess: fx ~ fy ~ 0.9*w, principal point center, no distortion
+                # Rough guess for demo; for real metric accuracy, run calibration.
                 fx = 0.9 * w
                 fy = 0.9 * w
                 cx = w / 2.0
@@ -136,64 +125,66 @@ def main():
                 dist = np.zeros((5, 1), dtype=np.float64)
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        detections = detector.detect(gray, estimate_tag_pose=False)
+        corners_list, ids, _ = detector.detectMarkers(gray)
 
-        # UI header box
-        overlay_text = [
-            "AprilTag Pose Detector",
-            f"Tag family: {tag_family} | Tag size: {tag_size_m:.3f} m",
+        # UI header
+        header = [
+            "AprilTag Pose Detector (OpenCV)",
+            f"Tag size: {tag_size_m:.3f} m | Family: APRILTAG_36h11",
             "Calibrated: YES" if use_calibrated else "Calibrated: NO (approx intrinsics)"
         ]
-
         y0 = 25
-        for i, t in enumerate(overlay_text):
-            cv2.putText(frame, t, (10, y0 + i*20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        for i, t in enumerate(header):
+            cv2.putText(frame, t, (10, y0 + i*20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
-        if len(detections) > 0:
-            # For demo: pick the detection with largest pixel area (closest tag)
-            def det_area(det):
-                c = det.corners
-                # polygon area
-                return abs(cv2.contourArea(c.astype(np.float32)))
-            det = max(detections, key=det_area)
+        if ids is not None and len(ids) > 0:
+            # Pick the largest detection (closest / best for demo)
+            best_i = None
+            best_area = -1.0
+            for i, c in enumerate(corners_list):
+                area = abs(cv2.contourArea(c.astype(np.float32)))
+                if area > best_area:
+                    best_area = area
+                    best_i = i
 
-            corners = det.corners.astype(np.float64)  # shape (4,2)
+            corners = corners_list[best_i].reshape(4, 2).astype(np.float64)
+            tag_id = int(ids[best_i][0])
+
             draw_tag_box(frame, corners)
 
-            # solvePnP wants image points shape (N,1,2)
             img_pts = corners.reshape(-1, 1, 2)
 
-            # Use iterative PnP for stability; could switch to SOLVEPNP_IPPE_SQUARE as well.
+            # For squares, IPPE can be very good; fall back to iterative if needed.
+            # Not all OpenCV builds support all flags equally; iterative is universally available.
             ok, rvec, tvec = cv2.solvePnP(
                 obj_pts, img_pts, K, dist,
                 flags=cv2.SOLVEPNP_ITERATIVE
             )
 
             if ok:
-                # Translation vector: camera -> tag center in meters (same units as obj_pts)
                 tx, ty, tz = tvec.flatten()
-                distance = float(np.linalg.norm(tvec))  # range to center
+                distance = float(np.linalg.norm(tvec))
 
-                # Rotation matrix
                 R, _ = cv2.Rodrigues(rvec)
                 pitch_deg, yaw_deg, roll_deg = euler_from_rotation_matrix(R)
 
-                # Draw axes (optional but great for demo)
+                # Draw axes (optional but nice)
                 draw_axes(frame, K, dist, rvec, tvec, axis_len=0.05)
 
-                # Draw center point
-                center_px = tuple(det.center.astype(int))
+                # Center point
+                center_px = tuple(np.mean(corners, axis=0).astype(int))
                 cv2.circle(frame, center_px, 4, (0, 255, 255), -1)
 
-                # Text block
                 info = [
-                    f"ID: {det.tag_id}",
+                    f"ID: {tag_id}",
                     f"Distance to center: {distance:.3f} m (z={tz:.3f} m)",
-                    f"Rotation (deg): X(pitch)={pitch_deg:+.1f}  Y(yaw)={yaw_deg:+.1f}  Z(roll)={roll_deg:+.1f}"
+                    f"Rotation (deg): X={pitch_deg:+.1f}  Y={yaw_deg:+.1f}  Z={roll_deg:+.1f}"
                 ]
                 y1 = 120
                 for i, line in enumerate(info):
-                    cv2.putText(frame, line, (10, y1 + i*24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    cv2.putText(frame, line, (10, y1 + i*24),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             else:
                 cv2.putText(frame, "solvePnP failed", (10, 130),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
