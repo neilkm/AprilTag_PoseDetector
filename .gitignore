@@ -1,4 +1,7 @@
 # .gitignore
 
-# temporary swp from vim
 *.swp
+.DS_Store
+.venv/
+/generated_pdfs/
+/tools/_apriltag-imgs/

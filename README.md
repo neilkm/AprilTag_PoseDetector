@@ -13,12 +13,26 @@ App should show:
 # Getting Started
 this project was built to run on M2 MacBookAir
 
-run the following command to install dependencies:
-$ pip install -r requirements.txt
+1. Install Dependencies
+use bash script for installing dependencies and running project:
+$ chmod +x setup.sh
+$ ./setup.sh
 
-calibrate camera (optional):
-$ python3 src/camera_calibrate.py
+make sure to allow shell application to access camera. may need to restart terminal.
 
-run detect pose:
-$ python3 src/detect_pose.py
+press 'q' to quit app once dependencies are installed and confirmed to be working.
 
+2. Generate pdfs of AprilTags to print out
+tags taken from:
+https://github.com/AprilRobotics/apriltag-imgs.git
+
+use bash script for cloning the repo and selecting which tag id to print
+$ chmod +x ./tools/generate_tag_pdf.sh 
+$ ./tools/generate_tag_pdf.sh
+
+a new directory in root now contains a printable pdf of the AprilTag you chose
+sized to 10cm exactly which is what the code expects
+$ cd ./generated_pdfs/ 
+
+3. Run code and be amazed.
+$ ./setup.sh
